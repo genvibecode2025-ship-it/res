@@ -191,14 +191,16 @@ const welcomeCommand = {
                 .setDescription('Simulate a welcome event')),
 
     async execute(interaction) {
-        const guildId = interaction.guild.id;
+        // ACK ASAP to avoid Discord's "The application did not respond" timeout.
+        await interaction.deferReply({ ephemeral: true });
+
+        if (!interaction.inGuild()) {
+            return interaction.editReply({ content: '❌ This command can only be used in a server.' });
+        }
+
+        const guildId = interaction.guildId;
         const subcommand = interaction.options.getSubcommand();
         const subcommandGroup = interaction.options.getSubcommandGroup(false);
-        
-        // Defer reply immediately to prevent timeout
-        if (subcommand !== 'test') { 
-             await interaction.deferReply({ ephemeral: true });
-        }
 
         // Initialize DB
         if (!db.get(guildId)) {
@@ -326,7 +328,6 @@ const welcomeCommand = {
 
         if (subcommand === 'test') {
              // For test, we handle it slightly differently to show "Simulating..."
-             await interaction.deferReply({ ephemeral: true });
             const s = db.get(guildId);
             if (!s.channelId) return interaction.editReply({ content: '❌ Set a channel first!' });
             await interaction.editReply({ content: '🔄 Simulating...' });
