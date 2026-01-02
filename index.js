@@ -24,6 +24,11 @@ const CONFIG = {
     defaultColor: '#0099ff'
 };
 
+if (!CONFIG.token || CONFIG.token === 'YOUR_BOT_TOKEN_HERE') {
+    console.error('Missing or invalid Discord bot token. Set TOKEN in .env.');
+    process.exit(1);
+}
+
 // ==========================================
 // 2. DATABASE UTILITY (JSON)
 // ==========================================
@@ -129,6 +134,7 @@ const welcomeCommand = {
         .setName('welcome')
         .setDescription('Ultimate Welcome System Configuration')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDMPermission(false)
         // --- Core Settings ---
         .addSubcommand(subcommand =>
             subcommand.setName('channel')
@@ -186,8 +192,8 @@ const welcomeCommand = {
 
     async execute(interaction) {
         const guildId = interaction.guild.id;
-        let subcommand = interaction.options.getSubcommand();
-        const subcommandGroup = interaction.options.getSubcommandGroup();
+        const subcommand = interaction.options.getSubcommand();
+        const subcommandGroup = interaction.options.getSubcommandGroup(false);
         
         // Defer reply immediately to prevent timeout
         if (subcommand !== 'test') { 
@@ -254,8 +260,10 @@ const welcomeCommand = {
         if (subcommand === 'autorole') {
             const role = interaction.options.getRole('role');
             if (role) {
+                const me = interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
+
                 // Security check
-                if (role.position >= interaction.guild.members.me.roles.highest.position) {
+                if (role.position >= me.roles.highest.position) {
                     return interaction.editReply({ content: '❌ I cannot assign this role because it is higher than or equal to my highest role.' });
                 }
                 await updateSetting('autorole', role.id);
@@ -509,4 +517,11 @@ server.listen(PORT, () => {
 // ==========================================
 // 6. LOGIN
 // ==========================================
-client.login(CONFIG.token);
+client.login(CONFIG.token).catch(err => {
+    if (err.code === 'TokenInvalid') {
+        console.error('Invalid Discord token. Please update TOKEN in .env.');
+    } else {
+        console.error('Failed to login:', err);
+    }
+    process.exit(1);
+});
