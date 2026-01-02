@@ -256,7 +256,56 @@ const welcomeCommand = {
         if (subcommand === 'dm') {
             const enabled = interaction.options.getBoolean('enabled');
             await updateSetting('dmEnabled', enabled);
-            return interaction.editReply({ content: `✅ DM Welcome is now **${enabled ? 'ON' : 'OFF'}**.` });
+
+            // Instant DM preview/test when enabling (helps verify privacy settings fast)
+            let dmNote = '';
+            if (enabled) {
+                try {
+                    const s = db.get(guildId);
+                    const e = s.embed || {};
+
+                    const parseText = (text) => {
+                        if (!text) return '';
+                        return text
+                            .replace(/{user}/g, interaction.member.toString())
+                            .replace(/{username}/g, interaction.user.username)
+                            .replace(/{tag}/g, interaction.user.tag)
+                            .replace(/{server}/g, interaction.guild.name)
+                            .replace(/{memberCount}/g, interaction.guild.memberCount)
+                            .replace(/{count}/g, interaction.guild.memberCount);
+                    };
+
+                    const description = parseText(s.message || 'Welcome {user} to {server}!');
+                    const title = parseText(e.title || 'Welcome!');
+                    const footer = parseText(e.footer || 'Member #{count}');
+
+                    const embed = new EmbedBuilder()
+                        .setColor(e.color || CONFIG.defaultColor)
+                        .setTitle(title)
+                        .setDescription(description)
+                        .setTimestamp();
+
+                    if (e.thumbnail) {
+                        embed.setThumbnail(interaction.user.displayAvatarURL({ size: 256 }));
+                    }
+
+                    if (e.image) {
+                        embed.setImage(e.image);
+                    }
+
+                    if (footer) {
+                        embed.setFooter({ text: footer });
+                    }
+
+                    await interaction.user.send({ embeds: [embed] });
+                    dmNote = ' Test DM sent.';
+                } catch (err) {
+                    console.warn('[dm-preview] Failed to DM command user:', err?.code, err?.message);
+                    dmNote = ' (⚠️ DM is ON but I could not DM you — check your privacy/DM settings.)';
+                }
+            }
+
+            return interaction.editReply({ content: `✅ DM Welcome is now **${enabled ? 'ON' : 'OFF'}**.${dmNote}` });
         }
 
         if (subcommand === 'autorole') {
@@ -329,9 +378,13 @@ const welcomeCommand = {
         if (subcommand === 'test') {
              // For test, we handle it slightly differently to show "Simulating..."
             const s = db.get(guildId);
-            if (!s.channelId) return interaction.editReply({ content: '❌ Set a channel first!' });
+            if (!s.channelId && !s.dmEnabled) return interaction.editReply({ content: '❌ Set a channel OR enable DM first!' });
             await interaction.editReply({ content: '🔄 Simulating...' });
             interaction.client.emit('guildMemberAdd', interaction.member);
+            return interaction.followUp({
+                content: 'If DM is ON, check your DMs. If you get nothing, your privacy settings may block DMs from this server/bot.',
+                ephemeral: true,
+            });
         }
     }
 };
@@ -343,13 +396,21 @@ commands.set(welcomeCommand.data.name, welcomeCommand);
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages
-    ],
-    partials: [Partials.Channel, Partials.Message]
+        GatewayIntentBits.GuildMembers
+    ]
 });
+
+// Extra gateway/shard logging (helps a lot on hosts like Render)
+client.on(Events.Warn, (message) => console.warn('[discord] warn:', message));
+client.on(Events.Error, (error) => console.error('[discord] error:', error));
+client.on(Events.ShardError, (error, shardId) => console.error(`[discord] shardError (shard ${shardId})`, error));
+client.on(Events.ShardDisconnect, (event, shardId) => console.error(`[discord] shardDisconnect (shard ${shardId})`, {
+    code: event.code,
+    reason: event.reason,
+    wasClean: event.wasClean,
+}));
+client.on(Events.ShardReconnecting, (shardId) => console.warn(`[discord] shardReconnecting (shard ${shardId})`));
+client.on(Events.ShardReady, (shardId) => console.log(`[discord] shardReady (shard ${shardId})`));
 
 // --- EVENT: READY ---
 client.once(Events.ClientReady, async (c) => {
@@ -411,8 +472,9 @@ client.on(Events.GuildMemberAdd, async (member) => {
     const guildId = member.guild.id;
     const settings = db.get(guildId);
 
-    // If no settings or no channel configured, do nothing
-    if (!settings || !settings.channelId) return;
+    // Allow DM-only welcome (channel is optional)
+    if (!settings) return;
+    if (!settings.channelId && !settings.dmEnabled) return;
 
     // Ensure defaults
     const s = {
@@ -470,36 +532,39 @@ client.on(Events.GuildMemberAdd, async (member) => {
     }
 
     // --- SENDING ---
-    let channel = member.guild.channels.cache.get(s.channelId);
-    if (!channel) {
-        try {
-            channel = await member.guild.channels.fetch(s.channelId);
-        } catch (err) {
-            console.error(`Could not fetch channel ${s.channelId}`);
-            return;
-        }
-    }
-    
-    if (channel) {
-        try {
-            const payload = { embeds: [embed] };
-            if (s.ping) {
-                payload.content = member.toString();
+    let channel = null;
+    if (s.channelId) {
+        channel = member.guild.channels.cache.get(s.channelId);
+        if (!channel) {
+            try {
+                channel = await member.guild.channels.fetch(s.channelId);
+            } catch (err) {
+                console.error(`Could not fetch channel ${s.channelId}:`, err?.code, err?.message);
+                channel = null;
             }
-            await channel.send(payload);
-        } catch (err) {
-            console.error(`Could not send welcome message to channel ${channel.id}:`, err);
         }
     }
 
-    // --- DM SENDING ---
+    const sendTasks = [];
+
+    // DM first (no channel dependency) + log failures (privacy settings etc.)
     if (s.dmEnabled) {
-        try {
-            await member.send({ embeds: [embed] });
-        } catch (err) {
-            // Ignore DM errors
-        }
+        sendTasks.push(member.send({ embeds: [embed] }).catch((err) => {
+            console.warn(`Could not DM welcome to user ${member.id} in guild ${guildId}:`, err?.code, err?.message);
+        }));
     }
+
+    if (channel) {
+        const payload = { embeds: [embed] };
+        if (s.ping) {
+            payload.content = member.toString();
+        }
+        sendTasks.push(channel.send(payload).catch((err) => {
+            console.error(`Could not send welcome message to channel ${channel.id}:`, err);
+        }));
+    }
+
+    await Promise.all(sendTasks);
 });
 
 // ==========================================
@@ -518,7 +583,10 @@ server.listen(PORT, () => {
 // ==========================================
 // 6. LOGIN
 // ==========================================
-client.login(CONFIG.token).catch(err => {
+console.log('[discord] Attempting login...');
+client.login(CONFIG.token).then(() => {
+    console.log('[discord] login() promise resolved');
+}).catch(err => {
     if (err.code === 'TokenInvalid') {
         console.error('Invalid Discord token. Please update TOKEN in .env.');
     } else {
