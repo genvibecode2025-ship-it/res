@@ -1,7 +1,20 @@
 const { Client, Collection, GatewayIntentBits, Partials } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const http = require('http'); // Add http module
 const config = require('./config');
+
+// --- HEALTH CHECK SERVER (Required for Render) ---
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is alive!');
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Health check server listening on port ${PORT}`);
+});
+// ------------------------------------------------
 
 const client = new Client({
     intents: [
