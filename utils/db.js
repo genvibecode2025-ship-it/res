@@ -27,22 +27,26 @@ class JsonDB {
         }
     }
 
-    save() {
-        fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+    async save() {
+        try {
+            await fs.promises.writeFile(this.filePath, JSON.stringify(this.data, null, 2));
+        } catch (err) {
+            console.error("Database save error:", err);
+        }
     }
 
     get(key) {
         return this.data[key];
     }
 
-    set(key, value) {
+    async set(key, value) {
         this.data[key] = value;
-        this.save();
+        await this.save();
     }
 
-    delete(key) {
+    async delete(key) {
         delete this.data[key];
-        this.save();
+        await this.save();
     }
 
     // Advanced nested get (e.g., get("guildId.channel"))
@@ -52,10 +56,10 @@ class JsonDB {
     }
 
     // Advanced nested set
-    setDeep(guildId, key, value) {
+    async setDeep(guildId, key, value) {
         if (!this.data[guildId]) this.data[guildId] = {};
         this.data[guildId][key] = value;
-        this.save();
+        await this.save();
     }
 }
 
