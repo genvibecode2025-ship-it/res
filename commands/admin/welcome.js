@@ -66,10 +66,15 @@ module.exports = {
         const guildId = interaction.guild.id;
         let subcommand = interaction.options.getSubcommand();
         const subcommandGroup = interaction.options.getSubcommandGroup();
+        
+        // Defer reply immediately to prevent timeout
+        if (subcommand !== 'test') { // Test handles its own reply flow usually, but we can unify.
+             await interaction.deferReply({ ephemeral: true });
+        }
 
         // Initialize DB
         if (!db.get(guildId)) {
-            db.set(guildId, {
+            await db.set(guildId, {
                 channelId: null,
                 message: "Welcome {user} to {server}!",
                 dmEnabled: false,
@@ -87,37 +92,41 @@ module.exports = {
         
         // Ensure new fields exist for old DB entries
         const currentSettings = db.get(guildId);
-        if (!currentSettings.embed) currentSettings.embed = { color: config.defaultColor, title: "Welcome!", thumbnail: true };
-        if (currentSettings.autorole === undefined) currentSettings.autorole = null;
-        if (currentSettings.ping === undefined) currentSettings.ping = false;
-        db.set(guildId, currentSettings);
+        let settingsChanged = false;
+        if (!currentSettings.embed) { currentSettings.embed = { color: config.defaultColor, title: "Welcome!", thumbnail: true }; settingsChanged = true; }
+        if (currentSettings.autorole === undefined) { currentSettings.autorole = null; settingsChanged = true; }
+        if (currentSettings.ping === undefined) { currentSettings.ping = false; settingsChanged = true; }
+        
+        if (settingsChanged) {
+            await db.set(guildId, currentSettings);
+        }
 
         // Helper to update deeply
-        const updateSetting = (key, value) => db.setDeep(guildId, key, value);
-        const updateEmbed = (key, value) => {
+        const updateSetting = async (key, value) => await db.setDeep(guildId, key, value);
+        const updateEmbed = async (key, value) => {
             const s = db.get(guildId);
             s.embed[key] = value;
-            db.set(guildId, s);
+            await db.set(guildId, s);
         };
 
         // --- HANDLERS ---
         
         if (subcommand === 'channel') {
             const ch = interaction.options.getChannel('target');
-            updateSetting('channelId', ch.id);
-            return interaction.reply({ content: `✅ Welcome channel set to ${ch}`, ephemeral: true });
+            await updateSetting('channelId', ch.id);
+            return interaction.editReply({ content: `✅ Welcome channel set to ${ch}` });
         }
 
         if (subcommand === 'message') {
             const msg = interaction.options.getString('content');
-            updateSetting('message', msg);
-            return interaction.reply({ content: `✅ Message updated.`, ephemeral: true });
+            await updateSetting('message', msg);
+            return interaction.editReply({ content: `✅ Message updated.` });
         }
 
         if (subcommand === 'dm') {
             const enabled = interaction.options.getBoolean('enabled');
-            updateSetting('dmEnabled', enabled);
-            return interaction.reply({ content: `✅ DM Welcome is now **${enabled ? 'ON' : 'OFF'}**.`, ephemeral: true });
+            await updateSetting('dmEnabled', enabled);
+            return interaction.editReply({ content: `✅ DM Welcome is now **${enabled ? 'ON' : 'OFF'}**.` });
         }
 
         if (subcommand === 'autorole') {
@@ -125,20 +134,20 @@ module.exports = {
             if (role) {
                 // Security check
                 if (role.position >= interaction.guild.members.me.roles.highest.position) {
-                    return interaction.reply({ content: '❌ I cannot assign this role because it is higher than or equal to my highest role.', ephemeral: true });
+                    return interaction.editReply({ content: '❌ I cannot assign this role because it is higher than or equal to my highest role.' });
                 }
-                updateSetting('autorole', role.id);
-                return interaction.reply({ content: `✅ Autorole set to **${role.name}**.`, ephemeral: true });
+                await updateSetting('autorole', role.id);
+                return interaction.editReply({ content: `✅ Autorole set to **${role.name}**.` });
             } else {
-                updateSetting('autorole', null);
-                return interaction.reply({ content: `✅ Autorole disabled.`, ephemeral: true });
+                await updateSetting('autorole', null);
+                return interaction.editReply({ content: `✅ Autorole disabled.` });
             }
         }
 
         if (subcommand === 'ping') {
             const enabled = interaction.options.getBoolean('enabled');
-            updateSetting('ping', enabled);
-            return interaction.reply({ content: `✅ User ping is now **${enabled ? 'ON' : 'OFF'}**.`, ephemeral: true });
+            await updateSetting('ping', enabled);
+            return interaction.editReply({ content: `✅ User ping is now **${enabled ? 'ON' : 'OFF'}**.` });
         }
 
         // --- Embed Group Handlers ---
@@ -146,25 +155,25 @@ module.exports = {
             if (subcommand === 'color') {
                 let hex = interaction.options.getString('hex');
                 if (!hex.startsWith('#')) hex = '#' + hex;
-                if (!/^#[0-9A-F]{6}$/i.test(hex)) return interaction.reply({ content: '❌ Invalid Hex Code.', ephemeral: true });
-                updateEmbed('color', hex);
-                return interaction.reply({ embeds: [new EmbedBuilder().setColor(hex).setDescription(`✅ Embed color set to \`${hex}\``)] });
+                if (!/^#[0-9A-F]{6}$/i.test(hex)) return interaction.editReply({ content: '❌ Invalid Hex Code.' });
+                await updateEmbed('color', hex);
+                return interaction.editReply({ embeds: [new EmbedBuilder().setColor(hex).setDescription(`✅ Embed color set to \`${hex}\``)] });
             }
             if (subcommand === 'title') {
-                updateEmbed('title', interaction.options.getString('text'));
-                return interaction.reply({ content: `✅ Embed title updated.`, ephemeral: true });
+                await updateEmbed('title', interaction.options.getString('text'));
+                return interaction.editReply({ content: `✅ Embed title updated.` });
             }
             if (subcommand === 'image') {
-                updateEmbed('image', interaction.options.getString('url'));
-                return interaction.reply({ content: `✅ Embed image updated.`, ephemeral: true });
+                await updateEmbed('image', interaction.options.getString('url'));
+                return interaction.editReply({ content: `✅ Embed image updated.` });
             }
             if (subcommand === 'thumbnail') {
-                updateEmbed('thumbnail', interaction.options.getBoolean('show'));
-                return interaction.reply({ content: `✅ Embed thumbnail updated.`, ephemeral: true });
+                await updateEmbed('thumbnail', interaction.options.getBoolean('show'));
+                return interaction.editReply({ content: `✅ Embed thumbnail updated.` });
             }
             if (subcommand === 'footer') {
-                updateEmbed('footer', interaction.options.getString('text'));
-                return interaction.reply({ content: `✅ Embed footer updated.`, ephemeral: true });
+                await updateEmbed('footer', interaction.options.getString('text'));
+                return interaction.editReply({ content: `✅ Embed footer updated.` });
             }
         }
 
@@ -182,13 +191,15 @@ module.exports = {
                     { name: 'Embed Title', value: e.title || 'Default', inline: true },
                     { name: 'Embed Footer', value: e.footer || 'Default', inline: true }
                 );
-            return interaction.reply({ embeds: [embed] });
+            return interaction.editReply({ embeds: [embed] });
         }
 
         if (subcommand === 'test') {
+             // For test, we handle it slightly differently to show "Simulating..."
+             await interaction.deferReply({ ephemeral: true });
             const s = db.get(guildId);
-            if (!s.channelId) return interaction.reply({ content: '❌ Set a channel first!', ephemeral: true });
-            await interaction.reply({ content: '🔄 Simulating...', ephemeral: true });
+            if (!s.channelId) return interaction.editReply({ content: '❌ Set a channel first!' });
+            await interaction.editReply({ content: '🔄 Simulating...' });
             interaction.client.emit('guildMemberAdd', interaction.member);
         }
     }
